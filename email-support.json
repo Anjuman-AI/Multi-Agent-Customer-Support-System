@@ -1,0 +1,750 @@
+{
+  "name": "02 - Email Customer Support",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "labelIds": [
+            "Label_Support"
+          ],
+          "readStatus": "unread"
+        },
+        "format": "simple",
+        "options": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4",
+          "name": "Gmail Support"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.from}}",
+              "operation": "notEmpty"
+            },
+            {
+              "value1": "={{$json.subject}}",
+              "operation": "notEmpty"
+            }
+          ]
+        }
+      },
+      "id": "filter-valid-emails",
+      "name": "Filter Valid Emails",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract email address from \"Name <email@domain.com>\" format\nconst fromField = $input.first().json.from || '';\nconst emailMatch = fromField.match(/<(.+?)>/) || fromField.match(/([^\\s]+@[^\\s]+)/);\nconst email = emailMatch ? emailMatch[1] : fromField;\n\n// Extract name\nconst nameMatch = fromField.match(/^(.+?)\\s*</);\nconst name = nameMatch ? nameMatch[1].trim().replace(/\"/g, '') : email.split('@')[0];\n\n// Clean subject (remove Re:, Fwd:, etc.)\nconst subject = ($input.first().json.subject || 'No Subject')\n  .replace(/^(Re|RE|Fwd|FWD|Fw):\\s*/gi, '')\n  .trim();\n\n// Get email body (prefer plainText, fallback to snippet)\nconst body = $input.first().json.plainText || $input.first().json.snippet || '';\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    ticket_id: `TKT-${new Date().toISOString().slice(0,10).replace(/-/g, '')}-${Date.now().toString().slice(-9)}`,\n    message: body,\n    customer_email: email,\n    customer_name: name,\n    subject_clean: subject,\n    message_id: $input.first().json.id,\n    thread_id: $input.first().json.threadId,\n    source: 'email',\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "extract-email-data",
+      "name": "Extract Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 300
+        },
+        "prompt": "=You are an expert customer support triage agent.\n\nYour role: Analyze customer emails and categorize them accurately.\n\nCATEGORIES:\n- BUG: Technical issues, errors, crashes, bugs, problems with functionality\n- BILLING: Payment issues, subscriptions, refunds, invoices, charges\n- FEATURE: Feature requests, suggestions, improvements, enhancements\n- GENERAL: Questions, how-to, information requests, general inquiries\n\nPRIORITY LEVELS:\n- URGENT: System down, payment blocked, data loss, security issue\n- HIGH: Significant impact, affecting work, multiple users\n- MEDIUM: Single user issue, workaround available\n- LOW: Questions, minor issues, suggestions\n\nSENTIMENT:\n- POSITIVE: Happy, satisfied, thankful customer\n- NEUTRAL: Normal inquiry, no strong emotion\n- NEGATIVE: Frustrated, angry, disappointed customer\n\nAnalyze this customer email and respond ONLY with valid JSON:\n\nSubject: {{$json.subject_clean}}\n\nEmail Body:\n{{$json.message}}\n\nCustomer: {{$json.customer_name}} ({{$json.customer_email}})\n\nResponse format (JSON only, no markdown):\n{\n  \"category\": \"BUG|BILLING|FEATURE|GENERAL\",\n  \"priority\": \"LOW|MEDIUM|HIGH|URGENT\",\n  \"confidence\": 0.95,\n  \"sentiment\": \"POSITIVE|NEUTRAL|NEGATIVE\",\n  \"reasoning\": \"Brief explanation of categorization\",\n  \"needs_human\": false,\n  \"keywords\": [\"key\", \"words\", \"detected\"],\n  \"suggested_subject\": \"Brief subject line for ticket\"\n}"
+      },
+      "id": "triage-agent",
+      "name": "AI Triage Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        220
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the OpenAI response and extract triage data\nconst triageText = $input.first().json.text || $input.first().json.choices?.[0]?.message?.content || '';\n\n// Try to extract JSON from response\nlet triageData;\ntry {\n  // Remove markdown code blocks if present\n  const cleanText = triageText.replace(/```json\\n?|```\\n?/g, '').trim();\n  triageData = JSON.parse(cleanText);\n} catch (error) {\n  // Fallback if JSON parsing fails\n  triageData = {\n    category: 'GENERAL',\n    priority: 'MEDIUM',\n    confidence: 0.5,\n    sentiment: 'NEUTRAL',\n    reasoning: 'Failed to parse AI response',\n    needs_human: true,\n    keywords: [],\n    suggested_subject: 'Support Request'\n  };\n}\n\n// Merge with existing data\nconst allData = $input.first().json;\nreturn [{\n  json: {\n    ...allData,\n    triage: triageData,\n    category: triageData.category,\n    priority: triageData.priority,\n    confidence: triageData.confidence,\n    sentiment: triageData.sentiment\n  }\n}];"
+      },
+      "id": "parse-triage-response",
+      "name": "Parse Triage Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "={{$json.category}}"
+      },
+      "id": "route-by-category",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 500
+        },
+        "prompt": "=You are a technical support specialist AI agent responding to customer emails.\n\nYour role: Help customers resolve technical issues with empathy and clear guidance.\n\nGUIDELINES:\n✓ Acknowledge the issue with empathy\n✓ Provide clear, step-by-step troubleshooting\n✓ Use simple language (avoid technical jargon)\n✓ Offer workarounds when possible\n✓ Set realistic expectations\n✓ Professional email format\n\nNEVER:\n✗ Blame the customer\n✗ Make promises you can't keep\n✗ Ignore their frustration\n✗ Use complex technical terms without explanation\n\nCustomer Priority: {{$json.priority}}\nCustomer Sentiment: {{$json.sentiment}}\nCustomer Name: {{$json.customer_name}}\n\nOriginal Subject: {{$json.subject_clean}}\n\nCustomer Email:\n{{$json.message}}\n\nGenerate a professional email response that:\n1. Opens with personalized greeting\n2. Acknowledges the issue and shows empathy\n3. Provides immediate troubleshooting steps (numbered list)\n4. Asks for clarification if needed\n5. Explains what will happen next\n6. Offers alternative solutions if applicable\n7. Closes professionally with contact info\n\nFormat as professional email. Keep under 250 words.\n\nResponse:"
+      },
+      "id": "bug-handler-agent",
+      "name": "Bug Handler Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        80
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 450
+        },
+        "prompt": "=You are a billing support specialist AI agent responding to customer emails.\n\nYour role: Handle payment, subscription, and billing inquiries professionally and empathetically.\n\nGUIDELINES:\n✓ Be empathetic about payment issues\n✓ Clearly explain charges and billing\n✓ Offer solutions proactively\n✓ Protect customer financial data (never ask for sensitive info)\n✓ Escalate refund requests to humans\n✓ Professional email format\n\nCustomer Priority: {{$json.priority}}\nCustomer Sentiment: {{$json.sentiment}}\nCustomer Name: {{$json.customer_name}}\n\nOriginal Subject: {{$json.subject_clean}}\n\nCustomer Email:\n{{$json.message}}\n\nGenerate a professional email response that:\n1. Opens with personalized greeting\n2. Acknowledges their billing concern with empathy\n3. Explains relevant charges or processes clearly\n4. Offers solutions or next steps\n5. Reassures them about data security\n6. Escalates if needed (refunds, disputes)\n7. Closes professionally\n\nFormat as professional email. Keep under 250 words.\n\nResponse:"
+      },
+      "id": "billing-agent",
+      "name": "Billing Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        200
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.8,
+          "maxTokens": 400
+        },
+        "prompt": "=You are a product specialist AI agent responding to customer emails.\n\nYour role: Handle feature requests and product suggestions positively and encouragingly.\n\nGUIDELINES:\n✓ Thank customer for valuable feedback\n✓ Check if feature already exists\n✓ Log request for product team\n✓ Manage expectations realistically\n✓ Suggest alternatives if available\n✓ Keep customer engaged\n✓ Professional email format\n\nCustomer Name: {{$json.customer_name}}\n\nOriginal Subject: {{$json.subject_clean}}\n\nCustomer Email:\n{{$json.message}}\n\nGenerate a professional email response that:\n1. Opens with personalized greeting\n2. Thanks them sincerely for the suggestion\n3. Checks if similar feature exists\n4. Explains current product roadmap (if known)\n5. Offers alternative solutions or workarounds\n6. Sets appropriate expectations about implementation\n7. Encourages continued feedback\n8. Closes professionally\n\nFormat as professional email. Keep under 250 words and maintain enthusiasm.\n\nResponse:"
+      },
+      "id": "feature-agent",
+      "name": "Feature Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        320
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 400
+        },
+        "prompt": "=You are a general customer support AI agent responding to customer emails.\n\nYour role: Answer questions and provide helpful information professionally.\n\nGUIDELINES:\n✓ Be friendly and professional\n✓ Provide clear, accurate information\n✓ Link to documentation when relevant\n✓ Encourage further questions\n✓ Be concise but thorough\n✓ Professional email format\n\nCustomer Name: {{$json.customer_name}}\n\nOriginal Subject: {{$json.subject_clean}}\n\nCustomer Email:\n{{$json.message}}\n\nGenerate a professional email response that:\n1. Opens with personalized greeting\n2. Directly answers their question\n3. Provides additional relevant information\n4. Links to helpful resources if applicable\n5. Encourages them to ask more questions\n6. Maintains friendly, professional tone\n7. Closes professionally\n\nFormat as professional email. Keep under 250 words.\n\nResponse:"
+      },
+      "id": "general-agent",
+      "name": "General Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        440
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "ai_response",
+              "value": "={{$json.text || $json.choices?.[0]?.message?.content || 'Unable to generate response'}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-ai-response",
+      "name": "Extract AI Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 200
+        },
+        "prompt": "=You are an escalation decision agent.\n\nYour role: Determine if a customer inquiry requires human intervention.\n\nESCALATE WHEN:\n- Customer is angry, frustrated, or threatening action\n- Mentions: lawyer, legal, lawsuit, refund, cancel subscription\n- Complex technical issue requiring deep product knowledge\n- Billing dispute or refund request\n- Data loss, security concern, or privacy issue\n- AI response might not fully resolve the issue\n- Customer explicitly requests to speak with human\n- Issue affects multiple users or is system-wide\n- Email contains urgent language or ALL CAPS\n\nDO NOT ESCALATE WHEN:\n- Simple, routine question with clear answer\n- Clear documentation exists for the issue\n- AI can confidently and safely resolve\n- Low risk of customer dissatisfaction\n- Common FAQ-type question\n\nReview this interaction:\n\nSubject: {{$json.subject_clean}}\n\nCustomer Email:\n{{$json.message}}\n\nTriage Result:\n{{$json.category}} | {{$json.priority}} | {{$json.sentiment}}\n\nAI Response Generated:\n{{$json.ai_response}}\n\nRespond with JSON only (no markdown):\n{\n  \"should_escalate\": true/false,\n  \"reason\": \"Clear explanation of escalation decision\",\n  \"urgency\": \"LOW|MEDIUM|HIGH\",\n  \"confidence\": 0.95,\n  \"suggested_action\": \"What human agent should do if escalated\",\n  \"estimated_resolution_time\": \"e.g., '24 hours', 'immediate'\"\n}"
+      },
+      "id": "escalation-agent",
+      "name": "Escalation Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        220
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the escalation decision\nconst escalationText = $input.first().json.text || $input.first().json.choices?.[0]?.message?.content || '';\n\nlet escalationData;\ntry {\n  const cleanText = escalationText.replace(/```json\\n?|```\\n?/g, '').trim();\n  escalationData = JSON.parse(cleanText);\n} catch (error) {\n  // Conservative fallback - escalate if parsing fails\n  escalationData = {\n    should_escalate: true,\n    reason: 'Failed to parse escalation decision - escalating to be safe',\n    urgency: 'MEDIUM',\n    confidence: 0.5,\n    suggested_action: 'Review email manually and respond',\n    estimated_resolution_time: '24 hours'\n  };\n}\n\n// Merge with existing data\nconst allData = $input.first().json;\nreturn [{\n  json: {\n    ...allData,\n    escalation: escalationData,\n    needs_human: escalationData.should_escalate,\n    escalation_reason: escalationData.reason,\n    escalation_urgency: escalationData.urgency\n  }\n}];"
+      },
+      "id": "parse-escalation",
+      "name": "Parse Escalation Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.needs_human}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "escalation-decision",
+      "name": "Escalation Decision",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2440,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{$json.customer_email}}",
+        "subject": "=Re: {{$json.subject_clean}}",
+        "message": "=Hi {{$json.customer_name}},\n\nThank you for contacting our support team. We've received your email and our team is reviewing your request.\n\n{{$json.ai_response}}\n\nIf you need immediate assistance or have additional questions, please don't hesitate to reply to this email.\n\nBest regards,\nCustomer Support Team\n\n---\nTicket ID: {{$json.ticket_id}}\nThis is an automated response from our AI support system. A human agent will review your request if needed.",
+        "options": {
+          "replyTo": "={{$json.from}}",
+          "ccList": "support@yourcompany.com"
+        }
+      },
+      "id": "send-auto-reply",
+      "name": "Send Auto-Reply Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        320
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4",
+          "name": "Gmail Support"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{$json.message_id}}",
+        "labelIds": [
+          "Label_Processed"
+        ]
+      },
+      "id": "mark-as-processed",
+      "name": "Mark as Processed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        320
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4",
+          "name": "Gmail Support"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC123DE",
+          "mode": "id",
+          "cachedResultName": "escalations"
+        },
+        "text": "=🚨 *Email Escalation - Human Attention Needed*\n\n*Ticket:* {{$json.ticket_id}}\n*Customer:* {{$json.customer_name}} ({{$json.customer_email}})\n*Subject:* {{$json.subject_clean}}\n*Priority:* {{$json.priority}}\n*Sentiment:* {{$json.sentiment}}\n*Urgency:* {{$json.escalation_urgency}}\n\n*Customer Email:*\n```\n{{$json.message.substring(0, 500)}}{{$json.message.length > 500 ? '...' : ''}}\n```\n\n*Why Escalated:*\n{{$json.escalation_reason}}\n\n*AI Response (draft):*\n{{$json.ai_response.substring(0, 300)}}{{$json.ai_response.length > 300 ? '...' : ''}}\n\n*Suggested Action:*\n{{$json.escalation?.suggested_action}}\n\n*Estimated Resolution:* {{$json.escalation?.estimated_resolution_time}}\n\n<https://airtable.com/YOUR_BASE_ID|View in Airtable> | <mailto:{{$json.customer_email}}|Reply to Customer>",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-escalation-alert",
+      "name": "Send Escalation Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2660,
+        120
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{$json.customer_email}}",
+        "subject": "=Re: {{$json.subject_clean}}",
+        "message": "=Hi {{$json.customer_name}},\n\nThank you for contacting our support team. I've reviewed your email and I'm connecting you with a specialist who can assist you better.\n\nA member of our team will respond to you within {{$json.escalation?.estimated_resolution_time || '24 hours'}}.\n\nIn the meantime, if you have any urgent concerns, please don't hesitate to reply to this email.\n\nBest regards,\nCustomer Support Team\n\n---\nTicket ID: {{$json.ticket_id}}\nStatus: Escalated to specialist",
+        "options": {
+          "replyTo": "={{$json.from}}"
+        }
+      },
+      "id": "send-escalation-email",
+      "name": "Send Escalation Acknowledgment",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        120
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4",
+          "name": "Gmail Support"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {},
+        "fields": {
+          "mappings": [
+            {
+              "fieldId": "Ticket ID",
+              "fieldValue": "={{$json.ticket_id}}"
+            },
+            {
+              "fieldId": "Status",
+              "fieldValue": "={{$json.needs_human ? 'Escalated' : 'Resolved'}}"
+            },
+            {
+              "fieldId": "Customer Email",
+              "fieldValue": "={{$json.customer_email}}"
+            },
+            {
+              "fieldId": "Channel",
+              "fieldValue": "Email"
+            },
+            {
+              "fieldId": "Message",
+              "fieldValue": "={{$json.subject_clean}}\\n\\n{{$json.message}}"
+            },
+            {
+              "fieldId": "Category",
+              "fieldValue": "={{$json.category}}"
+            },
+            {
+              "fieldId": "Priority",
+              "fieldValue": "={{$json.priority}}"
+            },
+            {
+              "fieldId": "AI Agent",
+              "fieldValue": "={{$json.category === 'BUG' ? 'Bug Handler' : $json.category === 'BILLING' ? 'Billing Agent' : $json.category === 'FEATURE' ? 'Feature Agent' : 'General Agent'}}"
+            },
+            {
+              "fieldId": "AI Response",
+              "fieldValue": "={{$json.ai_response}}"
+            },
+            {
+              "fieldId": "Confidence Score",
+              "fieldValue": "={{$json.confidence}}"
+            },
+            {
+              "fieldId": "Sentiment",
+              "fieldValue": "={{$json.sentiment}}"
+            },
+            {
+              "fieldId": "Needs Human",
+              "fieldValue": "={{$json.needs_human}}"
+            },
+            {
+              "fieldId": "Escalation Reason",
+              "fieldValue": "={{$json.escalation_reason || ''}}"
+            },
+            {
+              "fieldId": "Response Time",
+              "fieldValue": "={{($now.toUnixInteger() - new Date($json.created_at).getTime() / 1000)}}"
+            }
+          ]
+        }
+      },
+      "id": "log-to-airtable",
+      "name": "Log to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        220
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "stop-node",
+      "name": "Stop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        680,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid Emails": {
+      "main": [
+        [
+          {
+            "node": "Extract Email Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Email Data": {
+      "main": [
+        [
+          {
+            "node": "AI Triage Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Triage Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Triage Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Triage Response": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Category": {
+      "main": [
+        [
+          {
+            "node": "Bug Handler Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Billing Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Feature Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bug Handler Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Billing Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feature Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "General Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract AI Response": {
+      "main": [
+        [
+          {
+            "node": "Escalation Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Escalation Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Escalation Decision": {
+      "main": [
+        [
+          {
+            "node": "Escalation Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Decision": {
+      "main": [
+        [
+          {
+            "node": "Send Escalation Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Escalation Acknowledgment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Auto-Reply Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Auto-Reply Email": {
+      "main": [
+        [
+          {
+            "node": "Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Processed": {
+      "main": [
+        [
+          {
+            "node": "Log to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Escalation Alert": {
+      "main": [
+        [
+          {
+            "node": "Log to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Escalation Acknowledgment": {
+      "main": [
+        [
+          {
+            "node": "Log to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-09T12:00:00.000Z",
+  "versionId": "1"
+}
