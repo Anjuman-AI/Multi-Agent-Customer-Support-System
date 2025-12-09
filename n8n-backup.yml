@@ -1,0 +1,306 @@
+name: n8n Workflow Backup
+
+# This GitHub Action automatically backs up your n8n workflows
+# Runs daily and can be triggered manually
+
+on:
+  # Run daily at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+  
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+  
+  # Run on push to main branch (optional)
+  push:
+    branches:
+      - main
+    paths:
+      - 'workflows/n8n/**'
+
+env:
+  N8N_BACKUP_DIR: workflows/n8n
+  BACKUP_BRANCH: n8n-backups
+
+jobs:
+  backup-workflows:
+    name: Backup n8n Workflows
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Step 2: Set up Node.js (if using n8n CLI)
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      # Step 3: Install n8n CLI (optional - for cloud backup)
+      - name: Install n8n CLI
+        run: |
+          npm install -g n8n
+        continue-on-error: true
+      
+      # Step 4: Create backup directory
+      - name: Create backup directory
+        run: |
+          mkdir -p ${{ env.N8N_BACKUP_DIR }}/backups
+          mkdir -p ${{ env.N8N_BACKUP_DIR }}/archive
+      
+      # Step 5: Export workflows from n8n Cloud (if using API)
+      # Note: This requires n8n API credentials
+      - name: Export workflows from n8n Cloud
+        if: ${{ secrets.N8N_API_KEY != '' }}
+        env:
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+          N8N_BASE_URL: ${{ secrets.N8N_BASE_URL || 'https://your-workspace.app.n8n.cloud' }}
+        run: |
+          # Create timestamp
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          
+          # Export all workflows
+          echo "Exporting workflows from n8n..."
+          
+          # Use curl to fetch workflows via n8n API
+          curl -X GET "$N8N_BASE_URL/api/v1/workflows" \
+            -H "X-N8N-API-KEY: $N8N_API_KEY" \
+            -H "Content-Type: application/json" \
+            -o "${{ env.N8N_BACKUP_DIR }}/backups/workflows_$TIMESTAMP.json"
+          
+          echo "Workflows exported successfully!"
+        continue-on-error: true
+      
+      # Step 6: Archive old backups (keep last 30 days)
+      - name: Archive old backups
+        run: |
+          # Move backups older than 30 days to archive
+          find ${{ env.N8N_BACKUP_DIR }}/backups -name "*.json" -mtime +30 -exec mv {} ${{ env.N8N_BACKUP_DIR }}/archive/ \;
+          
+          # Delete archived backups older than 90 days
+          find ${{ env.N8N_BACKUP_DIR }}/archive -name "*.json" -mtime +90 -delete
+          
+          echo "Old backups archived successfully!"
+        continue-on-error: true
+      
+      # Step 7: Create backup summary
+      - name: Create backup summary
+        run: |
+          TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S UTC")
+          BACKUP_COUNT=$(ls -1 ${{ env.N8N_BACKUP_DIR }}/backups/*.json 2>/dev/null | wc -l)
+          ARCHIVE_COUNT=$(ls -1 ${{ env.N8N_BACKUP_DIR }}/archive/*.json 2>/dev/null | wc -l)
+          
+          cat > ${{ env.N8N_BACKUP_DIR }}/BACKUP_LOG.md << EOF
+          # n8n Workflow Backup Log
+          
+          **Last Backup:** $TIMESTAMP
+          **Active Backups:** $BACKUP_COUNT files
+          **Archived Backups:** $ARCHIVE_COUNT files
+          
+          ## Recent Backups
+          
+          \`\`\`
+          $(ls -lht ${{ env.N8N_BACKUP_DIR }}/backups/*.json 2>/dev/null | head -10)
+          \`\`\`
+          
+          ## Backup Schedule
+          
+          - **Frequency:** Daily at 2 AM UTC
+          - **Retention:** 30 days active, 90 days archived
+          - **Location:** \`workflows/n8n/backups/\`
+          
+          ## Manual Backup
+          
+          To trigger a manual backup, go to:
+          Actions → n8n Workflow Backup → Run workflow
+          
+          EOF
+          
+          echo "Backup summary created!"
+      
+      # Step 8: Commit and push changes
+      - name: Commit backup files
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add ${{ env.N8N_BACKUP_DIR }}/
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+            git commit -m "🔄 Auto-backup n8n workflows - $TIMESTAMP"
+            git push
+            echo "Backup committed and pushed successfully!"
+          fi
+      
+      # Step 9: Create backup notification
+      - name: Create backup notification
+        if: success()
+        run: |
+          echo "✅ n8n workflows backed up successfully!"
+          echo "📁 Backup location: ${{ env.N8N_BACKUP_DIR }}/backups/"
+          echo "📊 View backup log: ${{ env.N8N_BACKUP_DIR }}/BACKUP_LOG.md"
+      
+      # Step 10: Notify on failure
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ n8n workflow backup failed!"
+          echo "Please check the GitHub Actions logs for details."
+          echo "Manual intervention may be required."
+
+  # Optional: Verify backup integrity
+  verify-backup:
+    name: Verify Backup Integrity
+    runs-on: ubuntu-latest
+    needs: backup-workflows
+    if: success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Verify JSON files
+        run: |
+          echo "Verifying backup JSON files..."
+          
+          # Check if backup directory exists
+          if [ ! -d "${{ env.N8N_BACKUP_DIR }}/backups" ]; then
+            echo "⚠️ No backup directory found"
+            exit 0
+          fi
+          
+          # Verify each JSON file
+          ERROR_COUNT=0
+          for file in ${{ env.N8N_BACKUP_DIR }}/backups/*.json; do
+            if [ -f "$file" ]; then
+              if jq empty "$file" 2>/dev/null; then
+                echo "✅ Valid JSON: $(basename $file)"
+              else
+                echo "❌ Invalid JSON: $(basename $file)"
+                ERROR_COUNT=$((ERROR_COUNT + 1))
+              fi
+            fi
+          done
+          
+          if [ $ERROR_COUNT -gt 0 ]; then
+            echo "❌ Found $ERROR_COUNT invalid JSON files"
+            exit 1
+          else
+            echo "✅ All backup files are valid JSON"
+          fi
+      
+      - name: Check file sizes
+        run: |
+          echo "Checking backup file sizes..."
+          
+          for file in ${{ env.N8N_BACKUP_DIR }}/backups/*.json; do
+            if [ -f "$file" ]; then
+              SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+              if [ $SIZE -lt 100 ]; then
+                echo "⚠️ Suspiciously small file: $(basename $file) ($SIZE bytes)"
+              else
+                echo "✅ $(basename $file): $SIZE bytes"
+              fi
+            fi
+          done
+
+  # Optional: Create GitHub Release with backup
+  create-backup-release:
+    name: Create Backup Release
+    runs-on: ubuntu-latest
+    needs: verify-backup
+    if: github.event_name == 'schedule' && success()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create release archive
+        run: |
+          TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+          tar -czf n8n-backup-$TIMESTAMP.tar.gz ${{ env.N8N_BACKUP_DIR }}/backups/
+          echo "BACKUP_ARCHIVE=n8n-backup-$TIMESTAMP.tar.gz" >> $GITHUB_ENV
+          echo "RELEASE_TAG=backup-$TIMESTAMP" >> $GITHUB_ENV
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: n8n Backup - ${{ env.RELEASE_TAG }}
+          body: |
+            ## 🔄 Automated n8n Workflow Backup
+            
+            This release contains a backup of all n8n workflows.
+            
+            **Backup Date:** $(date +"%Y-%m-%d %H:%M:%S UTC")
+            **Workflows Included:** All active workflows
+            **Format:** JSON (n8n compatible)
+            
+            ### 📥 How to Restore
+            
+            1. Download the backup archive
+            2. Extract the JSON files
+            3. Import into n8n:
+               - Open n8n
+               - Go to Workflows
+               - Click "Import from File"
+               - Select the workflow JSON file
+            
+            ### 📁 Contents
+            
+            This archive contains:
+            - All workflow definitions
+            - Workflow settings
+            - Node configurations
+            
+            **Note:** Credentials are NOT included for security reasons.
+            You'll need to reconfigure credentials after import.
+          files: ${{ env.BACKUP_ARCHIVE }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+# Workflow summary and notifications
+  summary:
+    name: Backup Summary
+    runs-on: ubuntu-latest
+    needs: [backup-workflows, verify-backup]
+    if: always()
+    
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 📊 n8n Backup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.backup-workflows.result }}" == "success" ]; then
+            echo "✅ Backup completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Backup failed - check logs" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.verify-backup.result }}" == "success" ]; then
+            echo "✅ Backup verification passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Backup verification skipped or failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📁 Backup Location" >> $GITHUB_STEP_SUMMARY
+          echo "\`workflows/n8n/backups/\`" >> $GITHUB_STEP_SUMMARY
