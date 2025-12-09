@@ -1,0 +1,667 @@
+{
+  "name": "05 - Escalation Management",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=AND({Status} = 'Escalated', {Assigned To} = '')"
+        }
+      },
+      "id": "fetch-unassigned-escalations",
+      "name": "Fetch Unassigned Escalations",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtMinute": 15
+            }
+          ]
+        }
+      },
+      "id": "schedule-every-15-min",
+      "name": "Schedule (Every 15 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.records?.length || 0}}",
+              "value2": 0,
+              "operation": "largerEqual"
+            }
+          ]
+        }
+      },
+      "id": "check-if-escalations-exist",
+      "name": "Any Unassigned?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Smart agent assignment algorithm\nconst escalations = $input.first().json.records || [];\n\n// Define support team (would be from config/database in production)\nconst supportTeam = [\n  {\n    id: 'agent_1',\n    name: 'Sarah Chen',\n    email: 'sarah@company.com',\n    slack_id: 'U01ABC123',\n    specialties: ['BUG', 'FEATURE'],\n    max_tickets: 10,\n    priority_preference: ['URGENT', 'HIGH'],\n    current_load: 3,\n    availability: 'available'\n  },\n  {\n    id: 'agent_2',\n    name: 'Mike Johnson',\n    email: 'mike@company.com',\n    slack_id: 'U02DEF456',\n    specialties: ['BILLING', 'GENERAL'],\n    max_tickets: 8,\n    priority_preference: ['URGENT', 'HIGH', 'MEDIUM'],\n    current_load: 2,\n    availability: 'available'\n  },\n  {\n    id: 'agent_3',\n    name: 'Emily Rodriguez',\n    email: 'emily@company.com',\n    slack_id: 'U03GHI789',\n    specialties: ['BUG', 'BILLING'],\n    max_tickets: 12,\n    priority_preference: ['HIGH', 'MEDIUM'],\n    current_load: 5,\n    availability: 'available'\n  },\n  {\n    id: 'agent_4',\n    name: 'David Kim',\n    email: 'david@company.com',\n    slack_id: 'U04JKL012',\n    specialties: ['FEATURE', 'GENERAL'],\n    max_tickets: 10,\n    priority_preference: ['URGENT', 'HIGH'],\n    current_load: 4,\n    availability: 'available'\n  }\n];\n\n// Assignment algorithm\nfunction assignAgent(ticket) {\n  const category = ticket.fields?.Category || 'GENERAL';\n  const priority = ticket.fields?.Priority || 'MEDIUM';\n  \n  // Filter available agents\n  let availableAgents = supportTeam.filter(agent => \n    agent.availability === 'available' && \n    agent.current_load < agent.max_tickets\n  );\n  \n  if (availableAgents.length === 0) {\n    // All at capacity - assign to least loaded\n    availableAgents = supportTeam.sort((a, b) => a.current_load - b.current_load);\n  }\n  \n  // Score agents based on specialty and workload\n  const scoredAgents = availableAgents.map(agent => {\n    let score = 0;\n    \n    // Specialty match (highest priority)\n    if (agent.specialties.includes(category)) {\n      score += 50;\n    }\n    \n    // Priority preference\n    if (agent.priority_preference.includes(priority)) {\n      score += 30;\n    }\n    \n    // Workload balance (lower load = higher score)\n    score += (agent.max_tickets - agent.current_load) * 2;\n    \n    // Urgent tickets to agents who prefer them\n    if (priority === 'URGENT' && agent.priority_preference[0] === 'URGENT') {\n      score += 20;\n    }\n    \n    return { ...agent, score };\n  });\n  \n  // Sort by score (highest first)\n  scoredAgents.sort((a, b) => b.score - a.score);\n  \n  // Return best match\n  return scoredAgents[0];\n}\n\n// Assign all unassigned escalations\nconst assignments = escalations.map(escalation => {\n  const assignedAgent = assignAgent(escalation);\n  \n  // Increment agent's load\n  const agentIndex = supportTeam.findIndex(a => a.id === assignedAgent.id);\n  if (agentIndex !== -1) {\n    supportTeam[agentIndex].current_load++;\n  }\n  \n  return {\n    record_id: escalation.id,\n    ticket_id: escalation.fields?.['Ticket ID'],\n    category: escalation.fields?.Category,\n    priority: escalation.fields?.Priority,\n    sentiment: escalation.fields?.Sentiment,\n    customer_email: escalation.fields?.['Customer Email'],\n    message: escalation.fields?.Message,\n    escalation_reason: escalation.fields?.['Escalation Reason'],\n    created: escalation.fields?.Created,\n    assigned_agent: {\n      id: assignedAgent.id,\n      name: assignedAgent.name,\n      email: assignedAgent.email,\n      slack_id: assignedAgent.slack_id\n    },\n    assignment_score: assignedAgent.score,\n    assignment_time: new Date().toISOString()\n  };\n});\n\nreturn assignments.map(a => ({ json: a }));"
+      },
+      "id": "assign-agents",
+      "name": "Smart Agent Assignment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "id": "={{$json.record_id}}",
+        "options": {},
+        "fields": {
+          "mappings": [
+            {
+              "fieldId": "Assigned To",
+              "fieldValue": "={{$json.assigned_agent.name}}"
+            },
+            {
+              "fieldId": "Assigned Email",
+              "fieldValue": "={{$json.assigned_agent.email}}"
+            },
+            {
+              "fieldId": "Status",
+              "fieldValue": "In Progress"
+            },
+            {
+              "fieldId": "Assigned At",
+              "fieldValue": "={{$json.assignment_time}}"
+            }
+          ]
+        }
+      },
+      "id": "update-airtable-assignment",
+      "name": "Update Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        900,
+        220
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "={{$json.assigned_agent.slack_id}}",
+          "mode": "id"
+        },
+        "text": "=🎫 *New Ticket Assigned to You*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nHi {{$json.assigned_agent.name}}! 👋\n\n*Ticket:* {{$json.ticket_id}}\n*Category:* {{$json.category}}\n*Priority:* {{$json.priority}} {{$json.priority === 'URGENT' ? '🔴' : $json.priority === 'HIGH' ? '🟠' : '🟡'}}\n*Sentiment:* {{$json.sentiment}} {{$json.sentiment === 'NEGATIVE' ? '😞' : $json.sentiment === 'POSITIVE' ? '😊' : '😐'}}\n\n*Customer:*\n{{$json.customer_email}}\n\n*Customer Message:*\n```\n{{$json.message?.substring(0, 500)}}{{$json.message?.length > 500 ? '...' : ''}}\n```\n\n*Why Escalated:*\n{{$json.escalation_reason}}\n\n*Assignment Reason:*\n• Your specialty: {{$json.category}}\n• Match score: {{$json.assignment_score}}/100\n• Assigned at: {{$now.format('h:mm A')}}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*Quick Actions:*\n• <https://airtable.com/YOUR_BASE_ID/{{$json.record_id}}|View Full Ticket>\n• <mailto:{{$json.customer_email}}|Email Customer>\n• Reply here to update ticket status\n\n⏱️ *Response Time Goals:*\n• URGENT: 1 hour\n• HIGH: 4 hours\n• MEDIUM: 24 hours\n• LOW: 48 hours",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "notify-agent-dm",
+      "name": "Notify Agent (DM)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1120,
+        220
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=AND({Status} = 'In Progress', IS_AFTER({Assigned At}, DATEADD(NOW(), -24, 'hours')))"
+        }
+      },
+      "id": "fetch-overdue-tickets",
+      "name": "Fetch Overdue Tickets",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        240,
+        480
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate SLA and overdue status\nconst tickets = $input.first().json.records || [];\n\n// SLA targets (in hours)\nconst slaTargets = {\n  URGENT: 1,\n  HIGH: 4,\n  MEDIUM: 24,\n  LOW: 48\n};\n\nconst overdueTickets = tickets.map(ticket => {\n  const priority = ticket.fields?.Priority || 'MEDIUM';\n  const assignedAt = new Date(ticket.fields?.['Assigned At'] || ticket.fields?.Created);\n  const now = new Date();\n  \n  const hoursOpen = (now - assignedAt) / (1000 * 60 * 60);\n  const slaTarget = slaTargets[priority] || 24;\n  const hoursOverdue = hoursOpen - slaTarget;\n  const percentOverdue = (hoursOverdue / slaTarget * 100).toFixed(0);\n  \n  // Only include if actually overdue\n  if (hoursOverdue <= 0) {\n    return null;\n  }\n  \n  return {\n    record_id: ticket.id,\n    ticket_id: ticket.fields?.['Ticket ID'],\n    priority,\n    assigned_to: ticket.fields?.['Assigned To'],\n    assigned_email: ticket.fields?.['Assigned Email'],\n    customer_email: ticket.fields?.['Customer Email'],\n    category: ticket.fields?.Category,\n    message: ticket.fields?.Message,\n    assigned_at: assignedAt.toISOString(),\n    hours_open: hoursOpen.toFixed(1),\n    sla_target: slaTarget,\n    hours_overdue: hoursOverdue.toFixed(1),\n    percent_overdue: percentOverdue,\n    severity: hoursOverdue > slaTarget * 2 ? 'CRITICAL' : \n              hoursOverdue > slaTarget ? 'HIGH' : 'MEDIUM'\n  };\n}).filter(t => t !== null);\n\nreturn overdueTickets.map(t => ({ json: t }));"
+      },
+      "id": "calculate-overdue",
+      "name": "Calculate Overdue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$input.all().length}}",
+              "value2": 0,
+              "operation": "larger"
+            }
+          ]
+        }
+      },
+      "id": "check-overdue-exists",
+      "name": "Any Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        680,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "escalations"
+        },
+        "text": "=⚠️ *Overdue Ticket Alert*\n\n*Ticket:* {{$json.ticket_id}}\n*Assigned to:* {{$json.assigned_to}}\n*Priority:* {{$json.priority}}\n*Category:* {{$json.category}}\n\n*Status:*\n• Open for: {{$json.hours_open}} hours\n• SLA target: {{$json.sla_target}} hours\n• Overdue by: {{$json.hours_overdue}} hours ({{$json.percent_overdue}}% over)\n• Severity: {{$json.severity}} {{$json.severity === 'CRITICAL' ? '🔴' : '🟠'}}\n\n*Customer:* {{$json.customer_email}}\n\n<@{{$json.assigned_to}}> Please provide an update!\n\n<https://airtable.com/YOUR_BASE_ID/{{$json.record_id}}|View Ticket>",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-overdue-alert",
+      "name": "Send Overdue Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        900,
+        420
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=AND({Status} = 'In Progress', IS_AFTER({Assigned At}, DATEADD(NOW(), -3, 'hours')), {Priority} = 'URGENT')"
+        }
+      },
+      "id": "fetch-urgent-followup",
+      "name": "Fetch Urgent (No Update)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        240,
+        660
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check for tickets that need follow-up\nconst tickets = $input.first().json.records || [];\n\nconst followUpNeeded = tickets.map(ticket => {\n  const assignedAt = new Date(ticket.fields?.['Assigned At'] || ticket.fields?.Created);\n  const now = new Date();\n  const hoursOpen = (now - assignedAt) / (1000 * 60 * 60);\n  \n  // For URGENT: follow up after 1 hour if no response\n  // Could expand to check for last activity timestamp\n  \n  return {\n    record_id: ticket.id,\n    ticket_id: ticket.fields?.['Ticket ID'],\n    priority: ticket.fields?.Priority,\n    assigned_to: ticket.fields?.['Assigned To'],\n    assigned_email: ticket.fields?.['Assigned Email'],\n    customer_email: ticket.fields?.['Customer Email'],\n    category: ticket.fields?.Category,\n    hours_open: hoursOpen.toFixed(1),\n    needs_attention: hoursOpen > 1 // URGENT tickets need attention after 1 hour\n  };\n}).filter(t => t.needs_attention);\n\nreturn followUpNeeded.map(t => ({ json: t }));"
+      },
+      "id": "check-urgent-followup",
+      "name": "Check Follow-up Needed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$input.all().length}}",
+              "value2": 0,
+              "operation": "larger"
+            }
+          ]
+        }
+      },
+      "id": "check-followup-needed",
+      "name": "Any Need Follow-up?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        680,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "escalations"
+        },
+        "text": "=🔔 *Urgent Ticket Follow-up*\n\n*Ticket:* {{$json.ticket_id}}\n*Assigned to:* <@{{$json.assigned_to}}>\n*Priority:* URGENT 🔴\n*Category:* {{$json.category}}\n\n*Status:*\n• Open for: {{$json.hours_open}} hours\n• Customer waiting: {{$json.customer_email}}\n\n⏱️ *Action Required:*\nThis urgent ticket has been open for over 1 hour.\nPlease provide an update or reassign if needed.\n\n<https://airtable.com/YOUR_BASE_ID/{{$json.record_id}}|View Ticket>",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-followup-reminder",
+      "name": "Send Follow-up Reminder",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        900,
+        600
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=AND(OR({Status} = 'Escalated', {Status} = 'In Progress'), IS_BEFORE({Created}, DATEADD(NOW(), -7, 'days')))"
+        }
+      },
+      "id": "fetch-stale-tickets",
+      "name": "Fetch Stale Tickets",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        240,
+        840
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flag stale tickets for review\nconst tickets = $input.first().json.records || [];\n\nconst staleTickets = tickets.map(ticket => {\n  const created = new Date(ticket.fields?.Created);\n  const now = new Date();\n  const daysOpen = (now - created) / (1000 * 60 * 60 * 24);\n  \n  return {\n    record_id: ticket.id,\n    ticket_id: ticket.fields?.['Ticket ID'],\n    status: ticket.fields?.Status,\n    assigned_to: ticket.fields?.['Assigned To'] || 'Unassigned',\n    customer_email: ticket.fields?.['Customer Email'],\n    category: ticket.fields?.Category,\n    priority: ticket.fields?.Priority,\n    days_open: Math.floor(daysOpen),\n    created_date: created.toLocaleDateString()\n  };\n});\n\nreturn [{ json: { tickets: staleTickets, count: staleTickets.length } }];"
+      },
+      "id": "identify-stale",
+      "name": "Identify Stale Tickets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.count}}",
+              "value2": 0,
+              "operation": "larger"
+            }
+          ]
+        }
+      },
+      "id": "check-stale-exists",
+      "name": "Any Stale?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        680,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format stale tickets report\nconst data = $input.first().json;\nconst tickets = data.tickets || [];\n\nconst ticketList = tickets.map(t => \n  `• ${t.ticket_id} - ${t.category} (${t.priority}) - ${t.days_open} days - ${t.assigned_to}`\n).join('\\n');\n\nconst message = `🗂️ *Stale Tickets Report*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*${data.count} ticket(s) open for 7+ days*\n\nThese tickets may need attention:\n\n${ticketList}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*Recommended Actions:*\n• Review each ticket for status\n• Close resolved tickets\n• Reassign stalled tickets\n• Reach out to customers for updates\n\n<https://airtable.com/YOUR_BASE_ID|View All Tickets>`;\n\nreturn [{ json: { message, count: data.count } }];"
+      },
+      "id": "format-stale-report",
+      "name": "Format Stale Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        780
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "escalations"
+        },
+        "text": "={{$json.message}}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-stale-report",
+      "name": "Send Stale Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1120,
+        780
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "escalations"
+        },
+        "text": "=📊 *Escalation Summary*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n✅ *Assigned {{$input.all().length}} new escalation(s)*\n\nAgents notified via DM with ticket details.\n\n*Response Time Goals:*\n• 🔴 URGENT: 1 hour\n• 🟠 HIGH: 4 hours  \n• 🟡 MEDIUM: 24 hours\n• 🟢 LOW: 48 hours\n\n<https://airtable.com/YOUR_BASE_ID|View All Escalations>",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-assignment-summary",
+      "name": "Send Assignment Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1340,
+        220
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule (Every 15 min)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Unassigned Escalations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Overdue Tickets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Urgent (No Update)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Stale Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Unassigned Escalations": {
+      "main": [
+        [
+          {
+            "node": "Any Unassigned?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Unassigned?": {
+      "main": [
+        [
+          {
+            "node": "Smart Agent Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Smart Agent Assignment": {
+      "main": [
+        [
+          {
+            "node": "Update Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Airtable": {
+      "main": [
+        [
+          {
+            "node": "Notify Agent (DM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Agent (DM)": {
+      "main": [
+        [
+          {
+            "node": "Send Assignment Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Tickets": {
+      "main": [
+        [
+          {
+            "node": "Calculate Overdue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Overdue": {
+      "main": [
+        [
+          {
+            "node": "Any Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Send Overdue Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Fetch Urgent (No Update)": {
+      "main": [
+        [
+          {
+            "node": "Check Follow-up Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Follow-up Needed": {
+      "main": [
+        [
+          {
+            "node": "Any Need Follow-up?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Need Follow-up?": {
+      "main": [
+        [
+          {
+            "node": "Send Follow-up Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Fetch Stale Tickets": {
+      "main": [
+        [
+          {
+            "node": "Identify Stale Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Stale Tickets": {
+      "main": [
+        [
+          {
+            "node": "Any Stale?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Stale?": {
+      "main": [
+        [
+          {
+            "node": "Format Stale Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Format Stale Report": {
+      "main": [
+        [
+          {
+            "node": "Send Stale Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-09T12:00:00.000Z",
+  "versionId": "1"
+}
