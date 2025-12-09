@@ -1,0 +1,539 @@
+{
+  "name": "04 - AI Specialist Agents Playground",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "test-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        400
+      ],
+      "webhookId": "test-agent-playground"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate input\nconst body = $input.first().json.body || {};\n\nconst message = body.message || '';\nconst category = (body.category || 'GENERAL').toUpperCase();\nconst priority = (body.priority || 'MEDIUM').toUpperCase();\nconst sentiment = (body.sentiment || 'NEUTRAL').toUpperCase();\nconst customer_name = body.customer_name || 'Test Customer';\nconst customer_email = body.customer_email || 'test@example.com';\nconst subject = body.subject || 'Test Subject';\nconst test_all = body.test_all || false;\n\n// Validate inputs\nconst validCategories = ['BUG', 'BILLING', 'FEATURE', 'GENERAL'];\nconst validPriorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];\nconst validSentiments = ['POSITIVE', 'NEUTRAL', 'NEGATIVE'];\n\nif (!message) {\n  throw new Error('Message is required');\n}\n\nif (!validCategories.includes(category)) {\n  throw new Error(`Category must be one of: ${validCategories.join(', ')}`);\n}\n\nif (!validPriorities.includes(priority)) {\n  throw new Error(`Priority must be one of: ${validPriorities.join(', ')}`);\n}\n\nif (!validSentiments.includes(sentiment)) {\n  throw new Error(`Sentiment must be one of: ${validSentiments.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    message,\n    category,\n    priority,\n    sentiment,\n    customer_name,\n    customer_email,\n    subject,\n    test_all,\n    ticket_id: `TEST-${Date.now()}`,\n    created_at: new Date().toISOString(),\n    test_mode: true\n  }\n}];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.test_all}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "test-mode-check",
+      "name": "Test All Agents?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        680,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 300
+        },
+        "prompt": "=You are an expert customer support triage agent.\n\nYour role: Analyze customer messages and categorize them accurately.\n\n📋 CATEGORIES:\n- BUG: Technical issues, errors, crashes, bugs, problems with functionality\n- BILLING: Payment issues, subscriptions, refunds, invoices, charges\n- FEATURE: Feature requests, suggestions, improvements, enhancements\n- GENERAL: Questions, how-to, information requests, general inquiries\n\n📊 PRIORITY LEVELS:\n- URGENT: System down, payment blocked, data loss, security issue\n- HIGH: Significant impact, affecting work, multiple users\n- MEDIUM: Single user issue, workaround available\n- LOW: Questions, minor issues, suggestions\n\n🎭 SENTIMENT:\n- POSITIVE: Happy, satisfied, thankful customer\n- NEUTRAL: Normal inquiry, no strong emotion\n- NEGATIVE: Frustrated, angry, disappointed customer\n\n🔍 ANALYSIS GUIDELINES:\n✓ Read the entire message carefully\n✓ Identify key keywords and phrases\n✓ Consider tone and urgency\n✓ Look for multiple issues (prioritize most urgent)\n✓ Detect emotional state\n✓ Assess complexity and risk\n\n📝 CUSTOMER MESSAGE:\n{{$json.message}}\n\n👤 Customer: {{$json.customer_name}} ({{$json.customer_email}})\n📧 Subject: {{$json.subject}}\n📱 Channel: {{$json.source || 'test'}}\n\n⚠️ IMPORTANT: Respond ONLY with valid JSON (no markdown, no explanation):\n\n{\n  \"category\": \"BUG|BILLING|FEATURE|GENERAL\",\n  \"priority\": \"LOW|MEDIUM|HIGH|URGENT\",\n  \"confidence\": 0.95,\n  \"sentiment\": \"POSITIVE|NEUTRAL|NEGATIVE\",\n  \"reasoning\": \"Brief explanation of categorization (1-2 sentences)\",\n  \"needs_human\": false,\n  \"keywords\": [\"key\", \"words\", \"detected\"],\n  \"suggested_subject\": \"Brief subject line for ticket\",\n  \"complexity_score\": 3,\n  \"estimated_resolution_time\": \"5 minutes\"\n}"
+      },
+      "id": "triage-agent",
+      "name": "🔍 Triage Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse triage response\nconst triageText = $input.first().json.text || $input.first().json.choices?.[0]?.message?.content || '';\n\nlet triageData;\ntry {\n  const cleanText = triageText.replace(/```json\\n?|```\\n?/g, '').trim();\n  triageData = JSON.parse(cleanText);\n} catch (error) {\n  triageData = {\n    category: 'GENERAL',\n    priority: 'MEDIUM',\n    confidence: 0.5,\n    sentiment: 'NEUTRAL',\n    reasoning: 'Failed to parse AI response',\n    needs_human: true,\n    keywords: [],\n    suggested_subject: 'Support Request',\n    complexity_score: 5,\n    estimated_resolution_time: 'unknown'\n  };\n}\n\nconst allData = $input.first().json;\nreturn [{\n  json: {\n    ...allData,\n    triage: triageData,\n    category: triageData.category,\n    priority: triageData.priority,\n    confidence: triageData.confidence,\n    sentiment: triageData.sentiment\n  }\n}];"
+      },
+      "id": "parse-triage",
+      "name": "Parse Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "={{$json.category}}"
+      },
+      "id": "route-by-category",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 500
+        },
+        "prompt": "=You are a technical support specialist AI agent.\n\n🎯 YOUR ROLE:\nHelp customers resolve technical issues with empathy, clarity, and professionalism.\n\n✅ BEST PRACTICES:\n• Start with empathy - acknowledge their frustration\n• Use simple, non-technical language\n• Provide step-by-step instructions (numbered)\n• Offer multiple solutions when possible\n• Set realistic expectations\n• Ask clarifying questions if needed\n• Explain WHY (helps understanding)\n• Provide workarounds for immediate relief\n\n❌ NEVER:\n• Blame the customer (\"You did X wrong...\")\n• Use jargon without explanation\n• Make promises you can't keep\n• Ignore their emotional state\n• Give up easily\n• Be condescending\n\n📊 CUSTOMER CONTEXT:\n• Priority: {{$json.priority}}\n• Sentiment: {{$json.sentiment}}\n• Name: {{$json.customer_name}}\n• Confidence: {{$json.confidence}}\n\n💬 CUSTOMER MESSAGE:\n{{$json.message}}\n\n🎨 RESPONSE STRUCTURE:\n1. Empathetic opening (acknowledge issue)\n2. Immediate action they can take\n3. Step-by-step troubleshooting (3-5 steps)\n4. Alternative solutions or workarounds\n5. What happens next / timeline\n6. Encouraging close\n\n📝 EXAMPLE OPENING:\n\"I understand how frustrating it is when [issue]. Let me help you get this resolved right away.\"\n\n⚡ QUICK TIPS:\n• If {{$json.priority}} is HIGH/URGENT: Prioritize speed\n• If {{$json.sentiment}} is NEGATIVE: Extra empathy\n• If {{$json.confidence}} < 0.8: Ask more questions\n\n💡 Generate your response (200-300 words):\n"
+      },
+      "id": "bug-handler",
+      "name": "🐛 Bug Handler Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        200
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.6,
+          "maxTokens": 450
+        },
+        "prompt": "=You are a billing support specialist AI agent.\n\n🎯 YOUR ROLE:\nHandle payment, subscription, and billing inquiries with empathy and professionalism.\n\n✅ BEST PRACTICES:\n• Be extra empathetic (money is sensitive)\n• Explain charges clearly and transparently\n• Protect customer financial data (never ask for full card numbers)\n• Offer solutions proactively\n• Escalate refunds to humans\n• Acknowledge billing errors immediately\n• Be patient with confusion\n• Build trust through transparency\n\n❌ NEVER:\n• Dismiss their concerns\n• Make them feel stupid for not understanding\n• Ask for sensitive info (full card, SSN, passwords)\n• Argue about charges\n• Make refund promises (humans handle this)\n• Use complex financial jargon\n\n🔒 SECURITY RULES:\n✓ Can: Confirm last 4 digits, billing dates, amounts\n✗ Cannot: Request full card numbers, CVV, passwords\n✗ Cannot: Process refunds (escalate to human)\n\n📊 CUSTOMER CONTEXT:\n• Priority: {{$json.priority}}\n• Sentiment: {{$json.sentiment}}\n• Name: {{$json.customer_name}}\n• Email: {{$json.customer_email}}\n\n💬 CUSTOMER MESSAGE:\n{{$json.message}}\n\n🎨 RESPONSE STRUCTURE:\n1. Empathetic acknowledgment of billing concern\n2. Explanation of charges (clear, simple)\n3. Solution or next steps\n4. Reassurance about security/data\n5. Escalation note if refund/dispute needed\n6. Professional close\n\n🚨 AUTO-ESCALATE IF:\n• Customer requests refund\n• Disputes a charge\n• Reports unauthorized charge\n• Mentions \"lawyer\" or \"legal\"\n• Billing error confirmed\n\n📝 EXAMPLE:\n\"I completely understand your concern about this charge. Let me explain what happened and how we can resolve this...\"\n\n💡 Generate your response (200-300 words):\n"
+      },
+      "id": "billing-agent",
+      "name": "💰 Billing Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        320
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.8,
+          "maxTokens": 400
+        },
+        "prompt": "=You are a product specialist AI agent.\n\n🎯 YOUR ROLE:\nHandle feature requests with enthusiasm while managing expectations realistically.\n\n✅ BEST PRACTICES:\n• Show genuine excitement for their ideas\n• Thank them sincerely for feedback\n• Check if feature already exists (search knowledge)\n• Explain product vision and roadmap\n• Offer workarounds or alternatives\n• Manage expectations honestly\n• Keep them engaged and positive\n• Make them feel heard\n\n❌ NEVER:\n• Promise features will be built\n• Give specific timelines (unless confirmed)\n• Dismiss their ideas\n• Say \"that's not possible\"\n• Make them feel their request isn't important\n• Be defensive about current limitations\n\n📊 CUSTOMER CONTEXT:\n• Name: {{$json.customer_name}}\n• Priority: {{$json.priority}}\n• Sentiment: {{$json.sentiment}}\n\n💬 CUSTOMER MESSAGE:\n{{$json.message}}\n\n🎨 RESPONSE STRUCTURE:\n1. Enthusiastic thank you\n2. Validate their idea (why it's valuable)\n3. Check if feature exists (or similar)\n4. Current product status\n5. Alternative solutions/workarounds\n6. What happens next (logged for product team)\n7. Encouraging close\n\n💡 RESPONSE TONE:\n• Enthusiastic but honest\n• Appreciative of feedback\n• Solution-oriented\n• Transparent about limitations\n• Forward-looking\n\n📝 EXAMPLE:\n\"Thank you so much for this suggestion! I love how you're thinking about [benefit]. This is exactly the kind of feedback our product team values...\"\n\n🎯 GOAL:\nLeave customer feeling heard and valued, even if we can't implement immediately.\n\n✨ Generate your response (200-300 words):\n"
+      },
+      "id": "feature-agent",
+      "name": "✨ Feature Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        440
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 400
+        },
+        "prompt": "=You are a general customer support AI agent.\n\n🎯 YOUR ROLE:\nAnswer questions and provide information with clarity and friendliness.\n\n✅ BEST PRACTICES:\n• Be warm and approachable\n• Provide clear, accurate information\n• Link to documentation when relevant\n• Anticipate follow-up questions\n• Be concise but thorough\n• Use examples when helpful\n• Encourage further questions\n• Build confidence\n\n❌ NEVER:\n• Be robotic or cold\n• Assume knowledge level\n• Give incomplete answers\n• Ignore nuance in their question\n• Rush through explanation\n• Sound annoyed\n\n📊 CUSTOMER CONTEXT:\n• Name: {{$json.customer_name}}\n• Priority: {{$json.priority}}\n• Sentiment: {{$json.sentiment}}\n\n💬 CUSTOMER MESSAGE:\n{{$json.message}}\n\n🎨 RESPONSE STRUCTURE:\n1. Friendly greeting\n2. Direct answer to their question\n3. Additional relevant information\n4. Examples or use cases (if helpful)\n5. Links to documentation/resources\n6. Invitation for follow-up questions\n7. Friendly close\n\n💡 RESPONSE TONE:\n• Friendly and professional\n• Clear and educational\n• Patient and supportive\n• Encouraging\n\n📝 EXAMPLE:\n\"Great question! Let me walk you through this. [Answer] Here's a quick example to make it clearer...\"\n\n🎯 GOAL:\nLeave customer feeling informed, confident, and welcome to ask more.\n\n📚 DOCUMENTATION:\nIf relevant, mention:\n• Help docs: docs.example.com\n• Video tutorials: youtube.com/example\n• Community forum: community.example.com\n\n✨ Generate your response (200-300 words):\n"
+      },
+      "id": "general-agent",
+      "name": "💬 General Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        560
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "ai_response",
+              "value": "={{$json.text || $json.choices?.[0]?.message?.content || 'Unable to generate response'}}"
+            },
+            {
+              "name": "agent_used",
+              "value": "={{$json.category === 'BUG' ? 'Bug Handler' : $json.category === 'BILLING' ? 'Billing Agent' : $json.category === 'FEATURE' ? 'Feature Agent' : 'General Agent'}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-response",
+      "name": "Extract Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 250
+        },
+        "prompt": "=You are an escalation decision agent.\n\n🎯 YOUR ROLE:\nDetermine if human intervention is required (conservative approach).\n\n🚨 ESCALATE WHEN:\n• Customer is angry/frustrated/threatening\n• Keywords: lawyer, legal, lawsuit, BBB, social media threat\n• Refund or cancellation request\n• Billing dispute or unauthorized charge\n• Data loss or security concern\n• Complex technical issue requiring deep expertise\n• Multiple failed resolution attempts\n• VIP/enterprise customer\n• AI confidence < 0.7\n• Customer explicitly requests human\n• Negative sentiment + HIGH/URGENT priority\n• Issue affects multiple users\n• Regulatory/compliance concern\n\n✅ DO NOT ESCALATE:\n• Simple FAQ with clear answer\n• Documentation exists and was provided\n• AI confidence > 0.9\n• Low risk of dissatisfaction\n• Common question\n• Positive/neutral sentiment + low/medium priority\n\n📊 REVIEW THIS INTERACTION:\n\n💬 Customer Message:\n{{$json.message}}\n\n🔍 Triage Results:\n• Category: {{$json.category}}\n• Priority: {{$json.priority}}\n• Sentiment: {{$json.sentiment}}\n• Confidence: {{$json.confidence}}\n\n💡 AI Response Generated:\n{{$json.ai_response}}\n\n⚖️ DECISION FACTORS:\n1. Customer emotional state\n2. Issue complexity\n3. Risk level\n4. AI confidence\n5. Resolution likelihood\n\n⚠️ IMPORTANT: Respond ONLY with valid JSON (no markdown):\n\n{\n  \"should_escalate\": true/false,\n  \"reason\": \"Clear explanation why escalating or not\",\n  \"urgency\": \"LOW|MEDIUM|HIGH\",\n  \"confidence\": 0.95,\n  \"suggested_action\": \"Specific action for human agent if escalated\",\n  \"estimated_resolution_time\": \"2 hours\",\n  \"risk_score\": 3,\n  \"escalation_tags\": [\"billing_dispute\", \"refund_request\"]\n}"
+      },
+      "id": "escalation-agent",
+      "name": "🚨 Escalation Agent",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI GPT-4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse escalation decision\nconst escalationText = $input.first().json.text || $input.first().json.choices?.[0]?.message?.content || '';\n\nlet escalationData;\ntry {\n  const cleanText = escalationText.replace(/```json\\n?|```\\n?/g, '').trim();\n  escalationData = JSON.parse(cleanText);\n} catch (error) {\n  // Conservative: escalate if parsing fails\n  escalationData = {\n    should_escalate: true,\n    reason: 'Failed to parse escalation decision - escalating to be safe',\n    urgency: 'MEDIUM',\n    confidence: 0.5,\n    suggested_action: 'Review manually and respond',\n    estimated_resolution_time: '24 hours',\n    risk_score: 5,\n    escalation_tags: ['parsing_error']\n  };\n}\n\nconst allData = $input.first().json;\nreturn [{\n  json: {\n    ...allData,\n    escalation: escalationData,\n    needs_human: escalationData.should_escalate,\n    escalation_reason: escalationData.reason,\n    escalation_urgency: escalationData.urgency\n  }\n}];"
+      },
+      "id": "parse-escalation",
+      "name": "Parse Escalation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build comprehensive test response\nconst data = $input.first().json;\n\n// Format timestamp\nconst timestamp = new Date(data.created_at).toLocaleString();\n\n// Calculate processing time\nconst processingTime = Date.now() - new Date(data.created_at).getTime();\n\nconst response = {\n  success: true,\n  test_mode: true,\n  ticket_id: data.ticket_id,\n  timestamp: timestamp,\n  processing_time_ms: processingTime,\n  \n  input: {\n    message: data.message,\n    customer_name: data.customer_name,\n    customer_email: data.customer_email,\n    subject: data.subject\n  },\n  \n  triage: {\n    category: data.category,\n    priority: data.priority,\n    sentiment: data.sentiment,\n    confidence: data.confidence,\n    reasoning: data.triage?.reasoning,\n    keywords: data.triage?.keywords,\n    suggested_subject: data.triage?.suggested_subject,\n    complexity_score: data.triage?.complexity_score,\n    estimated_resolution_time: data.triage?.estimated_resolution_time\n  },\n  \n  agent: {\n    agent_used: data.agent_used,\n    response: data.ai_response,\n    temperature: data.category === 'BUG' ? 0.7 : \n                 data.category === 'BILLING' ? 0.6 : \n                 data.category === 'FEATURE' ? 0.8 : 0.7,\n    max_tokens: 500\n  },\n  \n  escalation: {\n    should_escalate: data.needs_human,\n    reason: data.escalation_reason,\n    urgency: data.escalation_urgency,\n    confidence: data.escalation?.confidence,\n    suggested_action: data.escalation?.suggested_action,\n    estimated_resolution_time: data.escalation?.estimated_resolution_time,\n    risk_score: data.escalation?.risk_score,\n    tags: data.escalation?.escalation_tags\n  },\n  \n  metrics: {\n    triage_confidence: data.confidence,\n    escalation_confidence: data.escalation?.confidence,\n    overall_risk_score: data.escalation?.risk_score,\n    processing_time_seconds: (processingTime / 1000).toFixed(2)\n  },\n  \n  recommendations: {\n    send_to_customer: !data.needs_human,\n    notify_team: data.needs_human,\n    follow_up_required: data.escalation?.risk_score > 5,\n    priority_handling: data.priority === 'URGENT' || data.priority === 'HIGH'\n  }\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "format-response",
+      "name": "Format Test Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify($json, null, 2)}}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2660,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Test all agents with the same message\nconst data = $input.first().json;\n\n// Create test cases for all 4 categories\nconst testCases = [\n  { ...data, category: 'BUG', test_name: 'Bug Handler Test' },\n  { ...data, category: 'BILLING', test_name: 'Billing Agent Test' },\n  { ...data, category: 'FEATURE', test_name: 'Feature Agent Test' },\n  { ...data, category: 'GENERAL', test_name: 'General Agent Test' }\n];\n\nreturn testCases.map(tc => ({ json: tc }));"
+      },
+      "id": "split-for-all-tests",
+      "name": "Split for All Agents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all test results\nconst allResults = $input.all().map(item => item.json);\n\nconst response = {\n  success: true,\n  test_mode: true,\n  test_type: 'all_agents',\n  message: 'Tested message across all 4 specialist agents',\n  timestamp: new Date().toISOString(),\n  \n  input: {\n    message: allResults[0].message,\n    customer_name: allResults[0].customer_name\n  },\n  \n  results: allResults.map(result => ({\n    agent: result.agent_used,\n    category: result.category,\n    confidence: result.confidence,\n    response: result.ai_response,\n    should_escalate: result.needs_human,\n    escalation_reason: result.escalation_reason\n  })),\n  \n  comparison: {\n    most_confident: allResults.reduce((max, r) => \n      r.confidence > max.confidence ? r : max\n    ).agent_used,\n    \n    escalation_count: allResults.filter(r => r.needs_human).length,\n    \n    avg_response_length: Math.round(\n      allResults.reduce((sum, r) => \n        sum + (r.ai_response?.length || 0), 0\n      ) / allResults.length\n    )\n  },\n  \n  recommendations: {\n    best_agent: allResults.reduce((max, r) => \n      r.confidence > max.confidence ? r : max\n    ).agent_used,\n    \n    message: 'Based on confidence scores, this message is best handled by the ' + \n             allResults.reduce((max, r) => \n               r.confidence > max.confidence ? r : max\n             ).agent_used\n  }\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "combine-all-results",
+      "name": "Combine All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        540
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Test All Agents?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test All Agents?": {
+      "main": [
+        [
+          {
+            "node": "Split for All Agents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🔍 Triage Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Triage Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Triage": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Category": {
+      "main": [
+        [
+          {
+            "node": "🐛 Bug Handler Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "💰 Billing Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✨ Feature Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "💬 General Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🐛 Bug Handler Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💰 Billing Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✨ Feature Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💬 General Agent": {
+      "main": [
+        [
+          {
+            "node": "Extract Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Response": {
+      "main": [
+        [
+          {
+            "node": "🚨 Escalation Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Escalation Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Escalation": {
+      "main": [
+        [
+          {
+            "node": "Format Test Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Combine All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Test Response": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split for All Agents": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine All Results": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-09T12:00:00.000Z",
+  "versionId": "1"
+}
