@@ -1,0 +1,389 @@
+{
+  "name": "03 - Daily Analytics Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate date range for today\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nconst tomorrow = new Date(today);\ntomorrow.setDate(tomorrow.getDate() + 1);\n\n// Calculate yesterday for comparison\nconst yesterday = new Date(today);\nyesterday.setDate(yesterday.getDate() - 1);\n\n// Calculate last 7 days\nconst sevenDaysAgo = new Date(today);\nsevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n\n// Calculate last 30 days\nconst thirtyDaysAgo = new Date(today);\nthirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);\n\nreturn [{\n  json: {\n    today: today.toISOString(),\n    tomorrow: tomorrow.toISOString(),\n    yesterday: yesterday.toISOString(),\n    seven_days_ago: sevenDaysAgo.toISOString(),\n    thirty_days_ago: thirtyDaysAgo.toISOString(),\n    date_string: today.toLocaleDateString('en-US', { \n      weekday: 'long', \n      year: 'numeric', \n      month: 'long', \n      day: 'numeric' \n    })\n  }\n}];"
+      },
+      "id": "calculate-dates",
+      "name": "Calculate Date Range",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=IS_AFTER({Created}, '{{$json.today}}')"
+        }
+      },
+      "id": "fetch-today-tickets",
+      "name": "Fetch Today's Tickets",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblXXXXXXXXXXXXXX",
+        "options": {
+          "filterByFormula": "=IS_AFTER({Created}, '{{$json.seven_days_ago}}')"
+        }
+      },
+      "id": "fetch-week-tickets",
+      "name": "Fetch Last 7 Days",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        680,
+        460
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get today's tickets\nconst todayTickets = $input.first().json;\nconst weekTickets = $input.all()[1]?.json || [];\n\n// Helper functions\nfunction calculateMetrics(tickets) {\n  const total = Array.isArray(tickets) ? tickets.length : (tickets.records?.length || 0);\n  const records = Array.isArray(tickets) ? tickets : (tickets.records || []);\n  \n  if (total === 0) {\n    return {\n      total: 0,\n      resolved: 0,\n      escalated: 0,\n      pending: 0,\n      resolution_rate: 0,\n      escalation_rate: 0,\n      avg_confidence: 0,\n      avg_response_time: 0,\n      by_category: { BUG: 0, BILLING: 0, FEATURE: 0, GENERAL: 0 },\n      by_priority: { LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0 },\n      by_sentiment: { POSITIVE: 0, NEUTRAL: 0, NEGATIVE: 0 },\n      by_channel: { slack: 0, email: 0 }\n    };\n  }\n  \n  // Count statuses\n  const resolved = records.filter(r => \n    r.fields?.Status === 'Resolved' || \n    r.fields?.Status === 'Closed'\n  ).length;\n  \n  const escalated = records.filter(r => \n    r.fields?.Status === 'Escalated' || \n    r.fields?.['Needs Human'] === true\n  ).length;\n  \n  const pending = records.filter(r => \n    r.fields?.Status === 'Pending' || \n    r.fields?.Status === 'In Progress'\n  ).length;\n  \n  // Calculate rates\n  const resolution_rate = total > 0 ? (resolved / total * 100).toFixed(1) : 0;\n  const escalation_rate = total > 0 ? (escalated / total * 100).toFixed(1) : 0;\n  \n  // Calculate averages\n  const confidenceScores = records\n    .map(r => r.fields?.['Confidence Score'])\n    .filter(c => c !== undefined && c !== null);\n  const avg_confidence = confidenceScores.length > 0\n    ? (confidenceScores.reduce((a, b) => a + b, 0) / confidenceScores.length).toFixed(2)\n    : 0;\n  \n  const responseTimes = records\n    .map(r => r.fields?.['Response Time'])\n    .filter(t => t !== undefined && t !== null && t > 0);\n  const avg_response_time = responseTimes.length > 0\n    ? (responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length).toFixed(1)\n    : 0;\n  \n  // Count by category\n  const by_category = {\n    BUG: records.filter(r => r.fields?.Category === 'BUG' || r.fields?.Category === 'Bug').length,\n    BILLING: records.filter(r => r.fields?.Category === 'BILLING' || r.fields?.Category === 'Billing').length,\n    FEATURE: records.filter(r => r.fields?.Category === 'FEATURE' || r.fields?.Category === 'Feature').length,\n    GENERAL: records.filter(r => r.fields?.Category === 'GENERAL' || r.fields?.Category === 'General').length\n  };\n  \n  // Count by priority\n  const by_priority = {\n    LOW: records.filter(r => r.fields?.Priority === 'LOW' || r.fields?.Priority === 'Low').length,\n    MEDIUM: records.filter(r => r.fields?.Priority === 'MEDIUM' || r.fields?.Priority === 'Medium').length,\n    HIGH: records.filter(r => r.fields?.Priority === 'HIGH' || r.fields?.Priority === 'High').length,\n    URGENT: records.filter(r => r.fields?.Priority === 'URGENT' || r.fields?.Priority === 'Urgent').length\n  };\n  \n  // Count by sentiment\n  const by_sentiment = {\n    POSITIVE: records.filter(r => r.fields?.Sentiment === 'POSITIVE' || r.fields?.Sentiment === 'Positive').length,\n    NEUTRAL: records.filter(r => r.fields?.Sentiment === 'NEUTRAL' || r.fields?.Sentiment === 'Neutral').length,\n    NEGATIVE: records.filter(r => r.fields?.Sentiment === 'NEGATIVE' || r.fields?.Sentiment === 'Negative').length\n  };\n  \n  // Count by channel\n  const by_channel = {\n    slack: records.filter(r => \n      r.fields?.Channel === 'Slack' || \n      r.fields?.Channel === 'slack' ||\n      r.fields?.source === 'slack'\n    ).length,\n    email: records.filter(r => \n      r.fields?.Channel === 'Email' || \n      r.fields?.Channel === 'email' ||\n      r.fields?.source === 'email'\n    ).length\n  };\n  \n  return {\n    total,\n    resolved,\n    escalated,\n    pending,\n    resolution_rate: parseFloat(resolution_rate),\n    escalation_rate: parseFloat(escalation_rate),\n    avg_confidence: parseFloat(avg_confidence),\n    avg_response_time: parseFloat(avg_response_time),\n    by_category,\n    by_priority,\n    by_sentiment,\n    by_channel\n  };\n}\n\n// Calculate metrics\nconst todayMetrics = calculateMetrics(todayTickets);\nconst weekMetrics = calculateMetrics(weekTickets);\n\n// Calculate cost savings\nconst traditional_cost_per_ticket = 8.33; // $50K/year / 6000 tickets = $8.33\nconst ai_cost_per_ticket = 0.03; // OpenAI API cost\nconst tickets_handled = todayMetrics.resolved;\nconst cost_savings_today = (tickets_handled * traditional_cost_per_ticket) - (todayMetrics.total * ai_cost_per_ticket);\nconst cost_savings_week = (weekMetrics.resolved * traditional_cost_per_ticket) - (weekMetrics.total * ai_cost_per_ticket);\n\nreturn [{\n  json: {\n    date: $input.first().json.date_string,\n    today: todayMetrics,\n    week: weekMetrics,\n    cost_savings: {\n      today: cost_savings_today.toFixed(2),\n      week: cost_savings_week.toFixed(2),\n      monthly_projection: (cost_savings_today * 30).toFixed(2),\n      annual_projection: (cost_savings_today * 365).toFixed(2)\n    },\n    top_categories: [\n      { name: 'Bug', count: todayMetrics.by_category.BUG },\n      { name: 'Billing', count: todayMetrics.by_category.BILLING },\n      { name: 'Feature', count: todayMetrics.by_category.FEATURE },\n      { name: 'General', count: todayMetrics.by_category.GENERAL }\n    ].sort((a, b) => b.count - a.count),\n    performance_grade: todayMetrics.resolution_rate >= 80 ? 'A' : \n                       todayMetrics.resolution_rate >= 70 ? 'B' : \n                       todayMetrics.resolution_rate >= 60 ? 'C' : 'D'\n  }\n}];"
+      },
+      "id": "calculate-metrics",
+      "name": "Calculate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate Slack message with rich formatting\nconst data = $input.first().json;\nconst today = data.today;\nconst week = data.week;\n\n// Helper function for progress bar\nfunction progressBar(percentage, length = 10) {\n  const filled = Math.round((percentage / 100) * length);\n  const empty = length - filled;\n  return '█'.repeat(filled) + '░'.repeat(empty);\n}\n\n// Helper function for trend indicator\nfunction trendIndicator(current, previous) {\n  if (current > previous) return '📈 +';\n  if (current < previous) return '📉 -';\n  return '➡️ ';\n}\n\n// Helper function for emoji grade\nfunction gradeEmoji(grade) {\n  const emojis = { 'A': '🌟', 'B': '✅', 'C': '⚠️', 'D': '❌' };\n  return emojis[grade] || '❓';\n}\n\n// Build the message\nconst message = `📊 *Daily Support Analytics Report*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📅 *${data.date}*\n\n*📈 Today's Performance*\n\n*Total Tickets:* ${today.total}\n• ✅ Resolved: ${today.resolved} (${today.resolution_rate}%)\n• 🚨 Escalated: ${today.escalated} (${today.escalation_rate}%)\n• ⏳ Pending: ${today.pending}\n\n*Resolution Rate:* ${today.resolution_rate}%\n${progressBar(today.resolution_rate, 15)} ${gradeEmoji(data.performance_grade)} Grade ${data.performance_grade}\n\n*Key Metrics:*\n• ⚡ Avg Response Time: *${today.avg_response_time}s*\n• 🎯 Avg Confidence: *${(today.avg_confidence * 100).toFixed(0)}%*\n• 💰 Cost Savings Today: *$${data.cost_savings.today}*\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*📊 Breakdown by Category*\n\n🐛 Bug: ${today.by_category.BUG} (${today.total > 0 ? (today.by_category.BUG/today.total*100).toFixed(0) : 0}%)\n${progressBar(today.total > 0 ? (today.by_category.BUG/today.total*100) : 0, 12)}\n\n💰 Billing: ${today.by_category.BILLING} (${today.total > 0 ? (today.by_category.BILLING/today.total*100).toFixed(0) : 0}%)\n${progressBar(today.total > 0 ? (today.by_category.BILLING/today.total*100) : 0, 12)}\n\n✨ Feature: ${today.by_category.FEATURE} (${today.total > 0 ? (today.by_category.FEATURE/today.total*100).toFixed(0) : 0}%)\n${progressBar(today.total > 0 ? (today.by_category.FEATURE/today.total*100) : 0, 12)}\n\n💬 General: ${today.by_category.GENERAL} (${today.total > 0 ? (today.by_category.GENERAL/today.total*100).toFixed(0) : 0}%)\n${progressBar(today.total > 0 ? (today.by_category.GENERAL/today.total*100) : 0, 12)}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*🎭 Sentiment Analysis*\n\n😊 Positive: ${today.by_sentiment.POSITIVE} (${today.total > 0 ? (today.by_sentiment.POSITIVE/today.total*100).toFixed(0) : 0}%)\n😐 Neutral: ${today.by_sentiment.NEUTRAL} (${today.total > 0 ? (today.by_sentiment.NEUTRAL/today.total*100).toFixed(0) : 0}%)\n😞 Negative: ${today.by_sentiment.NEGATIVE} (${today.total > 0 ? (today.by_sentiment.NEGATIVE/today.total*100).toFixed(0) : 0}%)\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*📱 Channel Distribution*\n\n💬 Slack: ${today.by_channel.slack} tickets\n📧 Email: ${today.by_channel.email} tickets\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*📅 7-Day Summary*\n\n• Total Tickets: ${week.total}\n• Resolved: ${week.resolved} (${week.resolution_rate}%)\n• Escalated: ${week.escalated} (${week.escalation_rate}%)\n• Avg Response: ${week.avg_response_time}s\n• Weekly Savings: *$${data.cost_savings.week}*\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*💰 Cost Savings Projection*\n\n• Today: $${data.cost_savings.today}\n• This Week: $${data.cost_savings.week}\n• Monthly: $${data.cost_savings.monthly_projection}\n• Annual: $${data.cost_savings.annual_projection}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*🎯 Action Items*\n\n${today.escalation_rate > 30 ? '⚠️ High escalation rate - review AI prompts\\n' : ''}${today.avg_confidence < 0.8 ? '⚠️ Low confidence scores - consider retraining\\n' : ''}${today.by_sentiment.NEGATIVE > today.total * 0.3 ? '⚠️ High negative sentiment - review customer satisfaction\\n' : ''}${today.escalation_rate <= 30 && today.avg_confidence >= 0.8 && today.by_sentiment.NEGATIVE <= today.total * 0.3 ? '✅ All systems performing well!\\n' : ''}\n<https://airtable.com/YOUR_BASE_ID|📊 View Full Dashboard>`;\n\nreturn [{\n  json: {\n    message: message,\n    metrics: data\n  }\n}];"
+      },
+      "id": "format-slack-message",
+      "name": "Format Slack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "system-logs"
+        },
+        "text": "={{$json.message}}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-to-slack",
+      "name": "Send to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1340,
+        300
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "application": "appXXXXXXXXXXXXXX",
+        "table": "tblYYYYYYYYYYYYYY",
+        "options": {},
+        "fields": {
+          "mappings": [
+            {
+              "fieldId": "Date",
+              "fieldValue": "={{$now.format('yyyy-MM-dd')}}"
+            },
+            {
+              "fieldId": "Total Tickets",
+              "fieldValue": "={{$json.metrics.today.total}}"
+            },
+            {
+              "fieldId": "Resolved",
+              "fieldValue": "={{$json.metrics.today.resolved}}"
+            },
+            {
+              "fieldId": "Escalated",
+              "fieldValue": "={{$json.metrics.today.escalated}}"
+            },
+            {
+              "fieldId": "Pending",
+              "fieldValue": "={{$json.metrics.today.pending}}"
+            },
+            {
+              "fieldId": "Resolution Rate",
+              "fieldValue": "={{$json.metrics.today.resolution_rate}}"
+            },
+            {
+              "fieldId": "Escalation Rate",
+              "fieldValue": "={{$json.metrics.today.escalation_rate}}"
+            },
+            {
+              "fieldId": "Avg Confidence",
+              "fieldValue": "={{$json.metrics.today.avg_confidence}}"
+            },
+            {
+              "fieldId": "Avg Response Time",
+              "fieldValue": "={{$json.metrics.today.avg_response_time}}"
+            },
+            {
+              "fieldId": "Bug Count",
+              "fieldValue": "={{$json.metrics.today.by_category.BUG}}"
+            },
+            {
+              "fieldId": "Billing Count",
+              "fieldValue": "={{$json.metrics.today.by_category.BILLING}}"
+            },
+            {
+              "fieldId": "Feature Count",
+              "fieldValue": "={{$json.metrics.today.by_category.FEATURE}}"
+            },
+            {
+              "fieldId": "General Count",
+              "fieldValue": "={{$json.metrics.today.by_category.GENERAL}}"
+            },
+            {
+              "fieldId": "Cost Savings",
+              "fieldValue": "={{$json.metrics.cost_savings.today}}"
+            },
+            {
+              "fieldId": "Performance Grade",
+              "fieldValue": "={{$json.metrics.performance_grade}}"
+            }
+          ]
+        }
+      },
+      "id": "log-metrics-to-airtable",
+      "name": "Log Metrics to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "3",
+          "name": "Airtable Support DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.metrics.today.total}}",
+              "value2": 0,
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "id": "check-if-empty",
+      "name": "Check if No Tickets",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C06ABC456EF",
+          "mode": "id",
+          "cachedResultName": "system-logs"
+        },
+        "text": "=📊 *Daily Support Analytics Report*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📅 *{{$node[\"Calculate Date Range\"].json.date_string}}*\n\n✨ *No tickets today!*\n\nGreat news - we had zero support tickets today. This could mean:\n• 🎉 Customers are having a smooth experience\n• 🚀 Recent improvements are working\n• 📆 It's a slow day (weekend/holiday)\n\nKeep up the great work! 💪\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*📅 7-Day Summary*\n\n• Total Tickets: {{$node[\"Calculate Metrics\"].json.week.total}}\n• Resolution Rate: {{$node[\"Calculate Metrics\"].json.week.resolution_rate}}%\n• Avg Response: {{$node[\"Calculate Metrics\"].json.week.avg_response_time}}s\n\n<https://airtable.com/YOUR_BASE_ID|📊 View Dashboard>",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "send-empty-report",
+      "name": "Send No Tickets Message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1340,
+        540
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "1",
+          "name": "Slack Support Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Calculate Date Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Date Range": {
+      "main": [
+        [
+          {
+            "node": "Fetch Today's Tickets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Last 7 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Today's Tickets": {
+      "main": [
+        [
+          {
+            "node": "Calculate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Last 7 Days": {
+      "main": [
+        [
+          {
+            "node": "Calculate Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Metrics": {
+      "main": [
+        [
+          {
+            "node": "Format Slack Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check if No Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slack Message": {
+      "main": [
+        [
+          {
+            "node": "Send to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Slack": {
+      "main": [
+        [
+          {
+            "node": "Log Metrics to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if No Tickets": {
+      "main": [
+        [
+          {
+            "node": "Send No Tickets Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-09T12:00:00.000Z",
+  "versionId": "1"
+}
